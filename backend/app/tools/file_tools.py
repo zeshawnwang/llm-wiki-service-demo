@@ -9,6 +9,10 @@ from typing import Optional, List, Dict, Any
 import aiofiles
 from datetime import datetime
 
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class FileTools:
     """文件操作工具类"""
@@ -40,18 +44,22 @@ class FileTools:
         """写入原始文档"""
         try:
             file_path = self.raw_dir / f"{doc_id}.md"
+            logger.debug(f"尝试写入文档到: {file_path}")
             
             # 如果提供了元数据，写入YAML frontmatter
             if metadata:
-                from python_frontmatter import Post
+                from frontmatter import Post, dumps
                 post = Post(content, **metadata)
-                content = post.dumps()
+                content = dumps(post)
             
             async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
                 await f.write(content)
+            logger.info(f"文档写入成功: {file_path}")
             return True
         except Exception as e:
-            print(f"写入文档失败: {e}")
+            logger.error(f"写入文档失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     async def delete_raw_document(self, doc_id: str) -> bool:
@@ -73,7 +81,7 @@ class FileTools:
             metadata = {}
             if content:
                 try:
-                    from python_frontmatter import loads
+                    from frontmatter import loads
                     post = loads(content)
                     metadata = post.metadata
                     content = post.content
@@ -102,7 +110,7 @@ class FileTools:
         
         # 解析frontmatter
         try:
-            from python_frontmatter import loads
+            from frontmatter import loads
             post = loads(content)
             return {
                 "id": page_id,
@@ -122,14 +130,14 @@ class FileTools:
             file_path = self.wiki_dir / "pages" / f"{page_id}.md"
             
             # 添加frontmatter
-            from python_frontmatter import Post
+            from frontmatter import Post, dumps
             post = Post(content, **(metadata or {}))
             
             async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
-                await f.write(post.dumps())
+                await f.write(dumps(post))
             return True
         except Exception as e:
-            print(f"写入Wiki页面失败: {e}")
+            logger.error(f"写入Wiki页面失败: {e}")
             return False
     
     async def delete_wiki_page(self, page_id: str) -> bool:
@@ -173,7 +181,7 @@ class FileTools:
                 await f.write(json.dumps(index, indent=2, ensure_ascii=False))
             return True
         except Exception as e:
-            print(f"写入索引失败: {e}")
+            logger.error(f"写入索引失败: {e}")
             return False
     
     async def update_index(self, page_id: str, metadata: Dict[str, Any]) -> bool:

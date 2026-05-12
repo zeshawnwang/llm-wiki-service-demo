@@ -13,6 +13,9 @@ from app.services.document_service import DocumentService
 from app.services.wiki_service import WikiService, WikiPageUpdate, WikiPageMetadata, WikiPageStatus
 from app.services.ai_service import AIService
 from app.services.search_service import SearchService
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -187,7 +190,7 @@ class IngestionPipeline:
         ]
 
         try:
-            result = await self.ai_service._call_openai(messages, temperature=0.3)
+            result = await self.ai_service.call_llm(messages, temperature=0.3)
             content = result["choices"][0]["message"]["content"]
             # 提取JSON（支持嵌套结构）
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
@@ -544,7 +547,7 @@ class IngestionPipeline:
         ]
 
         try:
-            result = await self.ai_service._call_openai(messages, temperature=0.3)
+            result = await self.ai_service.call_llm(messages, temperature=0.3)
             return result["choices"][0]["message"]["content"]
         except Exception as e:
             # 合并失败，简单拼接
@@ -594,7 +597,7 @@ class IngestionPipeline:
         ]
 
         try:
-            result = await self.ai_service._call_openai(messages, temperature=0.2)
+            result = await self.ai_service.call_llm(messages, temperature=0.2)
             resp = result["choices"][0]["message"]["content"]
             json_match = re.search(r'\{.*\}', resp, re.DOTALL)
             if json_match:
@@ -657,7 +660,7 @@ class IngestionPipeline:
         ]
 
         try:
-            result = await self.ai_service._call_openai(messages, temperature=0.3)
+            result = await self.ai_service.call_llm(messages, temperature=0.3)
             resp = result["choices"][0]["message"]["content"]
             json_match = re.search(r'\{[^}]*"segments"[^}]*\}', resp, re.DOTALL)
             if json_match:
@@ -715,7 +718,7 @@ class IngestionPipeline:
         ]
 
         try:
-            result = await self.ai_service._call_openai(messages, temperature=0.5)
+            result = await self.ai_service.call_llm(messages, temperature=0.5)
             resp = result["choices"][0]["message"]["content"]
             json_match = re.search(r'\{.*\}', resp, re.DOTALL)
             if json_match:

@@ -9,6 +9,10 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 import json
 
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class CodeTools:
     """代码执行工具类"""
@@ -152,17 +156,17 @@ import json
 try:
     data = json.loads("""{data}""")
     if isinstance(data, list):
-        print(f"数据类型: 列表，长度: {{len(data)}}")
+        logger.info(f"数据类型: 列表，长度: {{len(data)}}")
         if len(data) > 0:
-            print(f"第一条记录: {{data[0]}}")
+            logger.info(f"第一条记录: {{data[0]}}")
     elif isinstance(data, dict):
-        print(f"数据类型: 字典，键: {{list(data.keys())}}")
+        logger.info(f"数据类型: 字典，键: {{list(data.keys())}}")
     else:
-        print(f"数据类型: {{type(data).__name__}}")
-        print(f"数据: {{data}}")
+        logger.info(f"数据类型: {{type(data).__name__}}")
+        logger.info(f"数据: {{data}}")
 except Exception as e:
-    print(f"解析错误: {{e}}")
-    print(f"原始数据: {{data[:200]}}...")
+    logger.info(f"解析错误: {{e}}")
+    logger.info(f"原始数据: {{data[:200]}}...")
 '''
         elif analysis_type == "stats":
             code = f'''
@@ -182,19 +186,19 @@ try:
                         numeric_values.append(v)
         
         if numeric_values:
-            print(f"数值统计:")
-            print(f"  数量: {{len(numeric_values)}}")
-            print(f"  最小值: {{min(numeric_values)}}")
-            print(f"  最大值: {{max(numeric_values)}}")
-            print(f"  平均值: {{statistics.mean(numeric_values):.2f}}")
+            logger.info(f"数值统计:")
+            logger.info(f"  数量: {{len(numeric_values)}}")
+            logger.info(f"  最小值: {{min(numeric_values)}}")
+            logger.info(f"  最大值: {{max(numeric_values)}}")
+            logger.info(f"  平均值: {{statistics.mean(numeric_values):.2f}}")
             if len(numeric_values) > 1:
-                print(f"  标准差: {{statistics.stdev(numeric_values):.2f}}")
+                logger.info(f"  标准差: {{statistics.stdev(numeric_values):.2f}}")
         else:
-            print("未找到数值数据")
+            logger.info("未找到数值数据")
     else:
-        print("数据格式不支持统计")
+        logger.info("数据格式不支持统计")
 except Exception as e:
-    print(f"分析错误: {{e}}")
+    logger.info(f"分析错误: {{e}}")
 '''
         else:
             return {

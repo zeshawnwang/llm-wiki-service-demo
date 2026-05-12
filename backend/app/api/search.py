@@ -10,7 +10,7 @@ search_service = SearchService()
 @router.get("")
 async def search(
     q: str = Query(..., description="搜索关键词"),
-    search_type: str = Query("hybrid", description="搜索类型: keyword, semantic, hybrid"),
+    search_type: str = Query("semantic", description="搜索类型: keyword, semantic, hybrid"),
     limit: int = Query(10, ge=1, le=50),
     doc_type: Optional[str] = Query(None, description="限制类型: document, wiki")
 ):

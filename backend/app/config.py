@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     """应用配置"""
 
     # ========== LLM 供应商配置 ==========
-    llm_provider: Literal["openai", "anthropic"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "minimax"] = "openai"
 
     # OpenAI 配置
     openai_api_key: str = ""
@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_base_url: str = "https://api.anthropic.com"
     anthropic_chat_model: str = "claude-sonnet-4-20250514"
+
+    # Minimax 配置
+    minimax_api_key: str = ""
+    minimax_base_url: str = "https://api.minimax.chat"
+    minimax_chat_model: str = "MiniMax-M2.7"
 
     # ========== 向量搜索配置 ==========
     enable_vector_search: bool = True
@@ -63,6 +68,8 @@ class Settings(BaseSettings):
         """获取当前供应商的聊天模型名称"""
         if self.llm_provider == "anthropic":
             return self.anthropic_chat_model
+        if self.llm_provider == "minimax":
+            return self.minimax_chat_model
         return self.openai_chat_model
 
     @property
@@ -77,6 +84,10 @@ class Settings(BaseSettings):
     @property
     def is_anthropic(self) -> bool:
         return self.llm_provider == "anthropic"
+
+    @property
+    def is_minimax(self) -> bool:
+        return self.llm_provider == "minimax"
 
 
 @lru_cache()

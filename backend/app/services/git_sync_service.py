@@ -8,6 +8,9 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 
 from app.config import get_settings
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class GitSyncService:

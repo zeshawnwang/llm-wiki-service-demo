@@ -10,6 +10,9 @@ from pathlib import Path
 from app.config import get_settings
 from app.models.document import Document, DocumentMetadata, DocumentCreate, DocumentType
 from app.tools.file_tools import FileTools
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DocumentService:
@@ -40,8 +43,8 @@ class DocumentService:
         metadata.file_type = Path(doc_create.filename).suffix.lower()
         metadata.updated_at = datetime.now()
         
-        # 保存到文件系统
-        metadata_dict = metadata.model_dump()
+        # 保存到文件系统（使用JSON模式以处理枚举等类型）
+        metadata_dict = metadata.model_dump(mode="json")
         success = await self.file_tools.write_raw_document(
             doc_id=doc_id,
             content=doc_create.content,
@@ -66,7 +69,7 @@ class DocumentService:
         
         # 解析frontmatter
         try:
-            from python_frontmatter import loads
+            from frontmatter import loads
             post = loads(content)
             metadata = DocumentMetadata(**post.metadata) if post.metadata else DocumentMetadata()
             content = post.content
@@ -127,11 +130,11 @@ class DocumentService:
         if content is not None:
             new_metadata.file_size = len(content.encode('utf-8'))
         
-        # 保存
+        # 保存（使用JSON模式以处理枚举等类型）
         success = await self.file_tools.write_raw_document(
             doc_id=doc_id,
             content=new_content,
-            metadata=new_metadata.model_dump()
+            metadata=new_metadata.model_dump(mode="json")
         )
         
         if not success:

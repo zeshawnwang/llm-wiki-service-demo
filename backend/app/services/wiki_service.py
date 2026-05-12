@@ -9,6 +9,9 @@ from typing import Optional, List, Dict, Any
 from app.config import get_settings
 from app.models.wiki import WikiPage, WikiPageMetadata, WikiPageCreate, WikiPageUpdate, WikiPageStatus
 from app.tools.file_tools import FileTools
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class WikiService:
@@ -46,7 +49,7 @@ class WikiService:
         metadata.updated_at = datetime.now()
         
         # 保存页面
-        metadata_dict = metadata.model_dump()
+        metadata_dict = metadata.model_dump(mode="json")
         success = await self.file_tools.write_wiki_page(
             page_id=page_id,
             content=page_create.content,
@@ -84,6 +87,21 @@ class WikiService:
         # 确保title存在
         if "title" not in meta_dict:
             meta_dict["title"] = "Untitled"
+        
+        # 清理 related_pages 中的 None 值
+        if "related_pages" in meta_dict and isinstance(meta_dict["related_pages"], list):
+            meta_dict["related_pages"] = [
+                page_id for page_id in meta_dict["related_pages"] 
+                if page_id is not None and isinstance(page_id, str) and page_id.strip()
+            ]
+        
+        # 清理 source_documents 中的 None 值
+        if "source_documents" in meta_dict and isinstance(meta_dict["source_documents"], list):
+            meta_dict["source_documents"] = [
+                doc_id for doc_id in meta_dict["source_documents"] 
+                if doc_id is not None and isinstance(doc_id, str) and doc_id.strip()
+            ]
+        
         metadata = WikiPageMetadata(**meta_dict)
         
         return WikiPage(
@@ -164,7 +182,7 @@ class WikiService:
         success = await self.file_tools.write_wiki_page(
             page_id=page_id,
             content=new_content,
-            metadata=new_metadata.model_dump()
+            metadata=new_metadata.model_dump(mode="json")
         )
         
         if not success:

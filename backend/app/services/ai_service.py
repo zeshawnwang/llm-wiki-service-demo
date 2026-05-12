@@ -10,6 +10,9 @@ import json
 from app.config import get_settings
 from app.tools.file_tools import FileTools
 from app.tools.code_tools import CodeTools
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class AIService:
@@ -34,10 +37,12 @@ class AIService:
     ) -> Dict[str, Any]:
         """
         统一的LLM调用入口，根据 LLM_PROVIDER 配置自动路由。
-        所有业务方法应调用此方法，而非直接调用 _call_openai / _call_anthropic。
+        所有业务方法应调用此方法，而非直接调用 _call_openai / _call_anthropic / _call_minimax。
         """
         if self.provider == "anthropic":
             return await self._call_anthropic(messages, model=model, temperature=temperature)
+        elif self.provider == "minimax":
+            return await self._call_minimax(messages, model=model, temperature=temperature)
         else:
             return await self._call_openai(messages, model=model, temperature=temperature)
     
@@ -49,8 +54,12 @@ class AIService:
         stream: bool = False
     ) -> Dict[str, Any]:
         """调用OpenAI API"""
+        model_name = model or self.settings.openai_chat_model
+        logger.info(f"[OpenAI] 开始调用 - 模型: {model_name}, temperature: {temperature}")
+        
         api_key = self.settings.openai_api_key
         if not api_key:
+            logger.error(f"[OpenAI] 调用失败 - API Key未配置")
             raise ValueError("OpenAI API Key未配置，请检查 OPENAI_API_KEY")
         
         headers = {
@@ -59,21 +68,27 @@ class AIService:
         }
         
         data = {
-            "model": model or self.settings.openai_chat_model,
+            "model": model_name,
             "messages": messages,
             "temperature": temperature,
             "stream": stream
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.settings.openai_base_url}/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=120.0
-            )
-            response.raise_for_status()
-            return response.json()
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.settings.openai_base_url}/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=120.0
+                )
+                response.raise_for_status()
+                result = response.json()
+                logger.info(f"[OpenAI] 调用成功 - 模型: {model_name}, 响应tokens: {len(result.get('choices', []))}")
+                return result
+        except Exception as e:
+            logger.error(f"[OpenAI] 调用失败 - 模型: {model_name}, 错误: {str(e)}")
+            raise
     
     async def _call_anthropic(
         self,
@@ -82,8 +97,12 @@ class AIService:
         temperature: float = 0.7
     ) -> Dict[str, Any]:
         """调用Claude API"""
+        model_name = model or self.settings.anthropic_chat_model
+        logger.info(f"[Anthropic] 开始调用 - 模型: {model_name}, temperature: {temperature}")
+        
         api_key = self.settings.anthropic_api_key
         if not api_key:
+            logger.error(f"[Anthropic] 调用失败 - API Key未配置")
             raise ValueError("Anthropic API Key未配置，请检查 ANTHROPIC_API_KEY")
         
         headers = {
@@ -102,31 +121,144 @@ class AIService:
                 user_messages.append(msg)
         
         data = {
-            "model": model or self.settings.anthropic_chat_model,
+            "model": model_name,
             "messages": user_messages,
             "system": system_message,
             "temperature": temperature,
             "max_tokens": 4096
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.settings.anthropic_base_url}/v1/messages",
-                headers=headers,
-                json=data,
-                timeout=120.0
-            )
-            response.raise_for_status()
-            result = response.json()
-            # 转换为OpenAI格式
-            return {
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": result["content"][0]["text"]
-                    }
-                }]
-            }
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.settings.anthropic_base_url}/v1/messages",
+                    headers=headers,
+                    json=data,
+                    timeout=120.0
+                )
+                response.raise_for_status()
+                result = response.json()
+                # 转换为OpenAI格式
+                # 兼容不同的响应格式（Anthropic和MiniMax等代理服务）
+                content = ""
+                if "content" in result and result["content"]:
+                    if isinstance(result["content"], list):
+                        # 遍历content列表，找到type为"text"的项
+                        for content_item in result["content"]:
+                            if isinstance(content_item, dict):
+                                if content_item.get("type") == "text" and "text" in content_item:
+                                    content = content_item["text"]
+                                    break
+                                elif "text" in content_item:
+                                    content = content_item["text"]
+                                    break
+                                elif "content" in content_item:
+                                    content = content_item["content"]
+                                    break
+                    elif isinstance(result["content"], str):
+                        content = result["content"]
+                elif "text" in result:
+                    content = result["text"]
+                elif "message" in result and isinstance(result["message"], dict):
+                    content = result["message"].get("content", result["message"].get("text", ""))
+                
+                logger.info(f"[Anthropic] 调用成功 - 模型: {model_name}")
+                return {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": content
+                        }
+                    }]
+                }
+        except Exception as e:
+            logger.error(f"[Anthropic] 调用失败 - 模型: {model_name}, 错误: {str(e)}")
+            raise
+    
+    async def _call_minimax(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.7
+    ) -> Dict[str, Any]:
+        """调用Minimax API（支持通过Anthropic兼容代理访问）"""
+        model_name = model or self.settings.minimax_chat_model
+        logger.info(f"[Minimax] 开始调用 - 模型: {model_name}, temperature: {temperature}")
+        
+        api_key = self.settings.minimax_api_key
+        if not api_key:
+            logger.error(f"[Minimax] 调用失败 - API Key未配置")
+            raise ValueError("Minimax API Key未配置，请检查 MINIMAX_API_KEY")
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        system_message = ""
+        user_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_message = msg.get("content", "")
+            else:
+                user_messages.append(msg)
+        
+        data = {
+            "model": model_name,
+            "messages": user_messages,
+            "system": system_message,
+            "temperature": temperature,
+            "max_tokens": 4096
+        }
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.settings.minimax_base_url}/v1/messages",
+                    headers=headers,
+                    json=data,
+                    timeout=120.0
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                # Minimax响应格式处理（兼容Anthropic格式的代理服务）
+                content = ""
+                if "content" in result and result["content"]:
+                    if isinstance(result["content"], list):
+                        # 遍历content列表，找到type为"text"的项
+                        for content_item in result["content"]:
+                            if isinstance(content_item, dict):
+                                if content_item.get("type") == "text" and "text" in content_item:
+                                    content = content_item["text"]
+                                    break
+                                elif "text" in content_item:
+                                    content = content_item["text"]
+                                    break
+                                elif "content" in content_item:
+                                    content = content_item["content"]
+                                    break
+                    elif isinstance(result["content"], str):
+                        content = result["content"]
+                elif "choices" in result and result["choices"]:
+                    # OpenAI兼容格式
+                    message = result["choices"][0].get("message", {})
+                    content = message.get("content", "")
+                elif "text" in result:
+                    content = result["text"]
+                
+                logger.info(f"[Minimax] 调用成功 - 模型: {model_name}")
+                return {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": content
+                        }
+                    }]
+                }
+        except Exception as e:
+            logger.error(f"[Minimax] 调用失败 - 模型: {model_name}, 错误: {str(e)}")
+            raise
     
     async def _get_embedding(self, text: str) -> List[float]:
         """获取文本的embedding向量（目前仅OpenAI支持）"""
@@ -237,6 +369,14 @@ class AIService:
             result = await self.call_llm(messages, temperature=0.5)
             generated_content = result["choices"][0]["message"]["content"]
             
+            # 检查内容是否为空
+            if not generated_content or generated_content.strip() == "":
+                logger.warning(f"生成Wiki页面内容为空 - 标题: {title}")
+                return {
+                    "title": title,
+                    "content": f"生成失败: AI返回内容为空"
+                }
+            
             # 提取标题
             lines = generated_content.split('\n')
             generated_title = title
@@ -250,11 +390,19 @@ class AIService:
             
             final_content = '\n'.join(lines[content_start:]).strip()
             
+            if not final_content:
+                # 如果提取后内容为空，使用原始内容
+                final_content = generated_content.strip()
+            
             return {
                 "title": generated_title,
                 "content": final_content
             }
         except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"生成Wiki页面失败 - 标题: {title}, 错误类型: {type(e).__name__}, 错误: {str(e)}")
+            logger.debug(f"生成Wiki页面失败 - 完整堆栈: {error_trace}")
             return {
                 "title": title,
                 "content": f"生成失败: {str(e)}"
@@ -528,7 +676,7 @@ class AIService:
                     valid_ids.add(doc["id"])
                 return [item for item in selected if item.get("id") in valid_ids][:top_k]
         except Exception as e:
-            print(f"AI选择相关条目失败: {e}")
+            logger.error(f"AI选择相关条目失败: {e}")
 
         return []
 

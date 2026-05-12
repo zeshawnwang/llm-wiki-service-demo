@@ -12,6 +12,9 @@ from app.config import get_settings
 from app.services.document_service import DocumentService
 from app.services.wiki_service import WikiService
 from app.services.ai_service import AIService
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class SearchService:
@@ -61,7 +64,7 @@ class SearchService:
             self._id_to_content[content_id] = content[:200]  # 缓存预览
             return embedding
         except Exception as e:
-            print(f"创建embedding失败: {e}")
+            logger.error(f"创建embedding失败: {e}")
             return None
     
     async def index_document(self, doc_id: str, content: str) -> bool:
@@ -123,17 +126,16 @@ class SearchService:
         query: str,
         doc_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """关键词搜索"""
+        """关键词搜索（改进的中文支持）"""
         results = []
         query_lower = query.lower()
-        query_terms = query_lower.split()
         
         # 搜索文档
         if doc_type in [None, "document"]:
             docs = await self.doc_service.list_documents()
             for doc in docs:
                 score = self._calculate_keyword_score(
-                    query_terms,
+                    query_lower,
                     doc.metadata.title,
                     doc.content,
                     doc.metadata.tags
@@ -157,7 +159,7 @@ class SearchService:
             pages = await self.wiki_service.list_pages()
             for page in pages:
                 score = self._calculate_keyword_score(
-                    query_terms,
+                    query_lower,
                     page.metadata.title,
                     page.content,
                     page.metadata.tags
@@ -181,27 +183,40 @@ class SearchService:
     
     def _calculate_keyword_score(
         self,
-        query_terms: List[str],
+        query_lower: str,
         title: str,
         content: str,
         tags: List[str]
     ) -> float:
-        """计算关键词匹配分数"""
+        """计算关键词匹配分数（支持中文）"""
         score = 0.0
         title_lower = title.lower()
         content_lower = content.lower()
         tags_lower = [t.lower() for t in tags]
         
-        for term in query_terms:
-            # 标题匹配权重最高
-            if term in title_lower:
-                score += 10.0
-            # 标签匹配
-            if any(term in tag for tag in tags_lower):
-                score += 5.0
-            # 内容匹配
-            content_count = content_lower.count(term)
-            score += min(content_count * 0.5, 3.0)  # 最多3分
+        # 方法1: 完整查询匹配
+        if query_lower in title_lower:
+            score += 15.0
+        
+        # 方法2: 单个字符匹配（中文）
+        for char in query_lower:
+            if char in title_lower:
+                score += 0.5
+            if any(char in tag for tag in tags_lower):
+                score += 0.3
+            if char in content_lower:
+                score += 0.2
+        
+        # 方法3: 如果有空格（英文），按单词匹配
+        if " " in query_lower:
+            query_terms = query_lower.split()
+            for term in query_terms:
+                if term in title_lower:
+                    score += 10.0
+                if any(term in tag for tag in tags_lower):
+                    score += 5.0
+                content_count = content_lower.count(term)
+                score += min(content_count * 0.5, 3.0)
         
         return score
     
@@ -217,7 +232,7 @@ class SearchService:
         try:
             query_embedding = await self.ai_service._get_embedding(query)
         except Exception as e:
-            print(f"获取查询embedding失败: {e}")
+            logger.error(f"获取查询embedding失败: {e}")
             return results
         
         # 搜索文档
