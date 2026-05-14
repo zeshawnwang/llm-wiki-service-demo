@@ -16,6 +16,7 @@ vectors/
 
 # IDE
 .vscode/
+.joycode/
 .idea/
 *.swp
 *.swo

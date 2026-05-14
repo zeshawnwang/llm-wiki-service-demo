@@ -1,0 +1,12 @@
+services:
+  llm-wiki-service:
+    build:
+      context: ./backend
+    container_name: llm-wiki-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
