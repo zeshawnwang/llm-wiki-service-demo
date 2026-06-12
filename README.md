@@ -8,7 +8,8 @@
 - 🔍 **AI 驱动问答** — 用户只管提问，AI 自动检索相关 Wiki 并生成回答（附带引用来源）
 - 🔄 **增量知识融合** — 新文档进入后，AI 判断与已有知识的关系，自动合并或新建
 - 📊 **知识图谱可视化** — Wiki 页面之间的关联关系，类似 Obsidian 的图谱视图
-- ⚙️ **灵活配置** — 支持 OpenAI / Anthropic 切换，向量搜索可关闭以节省成本
+- 🔗 **Obsidian 原生兼容** — `data/` 可直接作为 Obsidian Vault，使用 `[[wikilinks]]`、可读文件名、自动索引
+- ⚙️ **灵活配置** — 支持 OpenAI / Anthropic / MiniMax 切换，向量搜索可关闭以节省成本
 - 📡 **Git 自动同步** — 定时将知识数据推送到远程 Git 仓库
 
 ## 🏗️ 架构
@@ -48,7 +49,7 @@ wiki-service/
 │   │   ├── api/                # REST API 路由（全部 JSON Body）
 │   │   ├── models/             # 数据模型（Pydantic）
 │   │   ├── services/           # 核心业务服务
-│   │   │   ├── ai_service.py          # AI 处理（OpenAI / Claude 路由）
+│   │   │   ├── ai_service.py          # AI 处理（OpenAI / Claude / MiniMax 路由）
 │   │   │   ├── pipeline_service.py    # 知识摄入流水线（5 种场景）
 │   │   │   ├── document_service.py    # 文档管理
 │   │   │   ├── wiki_service.py        # Wiki 知识管理
@@ -57,6 +58,14 @@ wiki-service/
 │   │   ├── tools/              # AI 工具（文件操作、代码执行）
 │   │   ├── config.py           # 配置管理（唯一配置来源）
 │   │   └── main.py             # 应用入口
+│   ├── data/                   # 数据存储（可直接作为 Obsidian Vault 打开）
+│   │   ├── raw/                # 原始资料层（AI 只读）
+│   │   ├── wiki/               # Wiki 知识层（AI 读写）
+│   │   │   ├── pages/          # Wiki 页面（标题_id.md，Obsidian 友好命名）
+│   │   │   ├── index/          # JSON 索引（API 使用）
+│   │   │   ├── index.md        # Obsidian 目录页（[[wikilinks]] 自动生成）
+│   │   │   └── log.md          # 操作时间线日志
+│   │   └── vectors/            # 向量索引缓存
 │   ├── .env.example            # 环境变量模板
 │   ├── requirements.txt
 │   └── README.md               # 后端完整文档
@@ -74,12 +83,15 @@ wiki-service/
 
 ```bash
 cd backend
-pip install -r requirements.txt
+uv venv && source .venv/bin/activate   # 创建并激活虚拟环境
+uv pip install -r requirements.txt      # 安装依赖
 cp .env.example .env
 # 编辑 .env，配置 LLM API Key（OPENAI_API_KEY 或 ANTHROPIC_API_KEY）
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 # 访问 http://localhost:8000/docs 查看 Swagger API 文档
 ```
+
+> **Obsidian 集成：** `backend/data/` 可直接用 Obsidian 打开。Wiki 页面使用 `[[wikilinks]]` 互相链接，图谱视图可展示知识关系。
 
 ### 前端（待开发）
 
@@ -116,7 +128,7 @@ pnpm dev
 
 | 配置项 | 说明 | 默认值 |
 |-------|------|--------|
-| `LLM_PROVIDER` | LLM 供应商（`openai` / `anthropic`） | `openai` |
+| `LLM_PROVIDER` | LLM 供应商（`openai` / `anthropic` / `minimax`） | `openai` |
 | `OPENAI_API_KEY` | OpenAI API Key | — |
 | `ANTHROPIC_API_KEY` | Anthropic API Key | — |
 | `ENABLE_VECTOR_SEARCH` | 是否启用向量搜索（关闭后零成本） | `true` |

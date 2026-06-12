@@ -73,7 +73,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```env
 # ===== LLM 供应商 =====
-LLM_PROVIDER=openai                          # openai | anthropic
+LLM_PROVIDER=openai                          # openai | anthropic | minimax | deepseek
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_CHAT_MODEL=gpt-4o-mini
@@ -81,6 +81,12 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ANTHROPIC_API_KEY=
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 ANTHROPIC_CHAT_MODEL=claude-sonnet-4-20250514
+MINIMAX_API_KEY=
+MINIMAX_BASE_URL=https://api.minimax.chat
+MINIMAX_CHAT_MODEL=MiniMax-M2.7
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_CHAT_MODEL=deepseek-chat
 
 # ===== 向量搜索 =====
 ENABLE_VECTOR_SEARCH=true                    # true | false
@@ -116,7 +122,7 @@ PORT=8000
 
 | 配置项 | 默认值 | 说明 |
 |-------|--------|------|
-| `LLM_PROVIDER` | `openai` | 选择 LLM 供应商，`openai` 或 `anthropic` |
+| `LLM_PROVIDER` | `openai` | 选择 LLM 供应商，`openai` / `anthropic` / `minimax` / `deepseek` |
 | `ENABLE_VECTOR_SEARCH` | `true` | 是否启用向量语义搜索，关闭后搜索零成本 |
 | `QA_RETRIEVAL_MODE` | `ai` | 问答检索模式，`ai` 直接给AI全量目录，`auto` 大库先关键词预筛 |
 | `QA_AI_DIRECT_THRESHOLD` | `200` | `auto` 模式下，Wiki页面数低于此值直接全部给AI |
@@ -440,6 +446,7 @@ AI分析:
 - `PUT /api/wiki/pages/{id}` - 更新Wiki页面
 - `DELETE /api/wiki/pages/{id}` - 删除Wiki页面
 - `GET /api/wiki/graph` - 获取知识图谱数据
+- `POST /api/wiki/backfill-descriptions` - 批量为缺少描述的Wiki页面生成description
 
 ### AI处理
 - `POST /api/ai/ask` - 智能问答（用户只管提问，系统自动检索+回答）
@@ -467,7 +474,7 @@ AI分析:
 
 ### 当前方案：直接调用 LLM API
 
-本项目的 AI 调用方式是直接通过 `httpx` 调用 OpenAI / Anthropic 的 REST API，所有工具（文件读写、代码执行）都是自己实现的简单 Python 类。
+本项目的 AI 调用方式是直接通过 `httpx` 调用 OpenAI / Anthropic / Minimax / DeepSeek 的 REST API，所有工具（文件读写、代码执行）都是自己实现的简单 Python 类。
 
 ### 优势
 
@@ -485,7 +492,7 @@ AI分析:
 
 | 维度 | 说明 |
 |------|------|
-| **无标准化抽象** | 切换 LLM 供应商需要自己写适配代码（本项目通过 `call_llm()` 路由解决） |
+| **无标准化抽象** | 本项目通过 `call_llm()` 统一路由，支持 OpenAI / Anthropic / Minimax / DeepSeek 四个供应商，切换只需改一行 `LLM_PROVIDER` 配置。DeepSeek 和 OpenAI 使用相同的 API 格式（`/chat/completions`），Minimax 和 Anthropic 使用各自的 API 格式，均由 `AIService` 内部适配。 |
 | **无内置 RAG** | 需要自己实现文档切片、检索、上下文拼接（本项目通过 `SearchService` 解决） |
 | **无 Agent 框架** | 工具调用逻辑是自己解析 JSON 实现的，缺少 LangChain 的 ReAct/Plan-and-Execute 等策略 |
 | **无流式输出** | 当前实现是同步返回完整结果，不支持 SSE 流式输出 |
@@ -522,10 +529,14 @@ from langchain_anthropic import ChatAnthropic
 def get_llm():
     if settings.llm_provider == "anthropic":
         return ChatAnthropic(model=settings.anthropic_chat_model, ...)
+    elif settings.llm_provider == "minimax":
+        return ChatOpenAI(model=settings.minimax_chat_model, base_url=settings.minimax_base_url, ...)
+    elif settings.llm_provider == "deepseek":
+        return ChatOpenAI(model=settings.deepseek_chat_model, base_url=settings.deepseek_base_url, ...)
     return ChatOpenAI(model=settings.openai_chat_model, ...)
 ```
 
-**改动范围：** `ai_service.py` 全部重写，删除 `_call_openai`、`_call_anthropic`、`call_llm`
+**改动范围：** `ai_service.py` 全部重写，删除 `_call_openai`、`_call_anthropic`、`_call_minimax`、`_call_deepseek`、`call_llm`
 
 ### 2. 工具系统重构 → LangChain Tools
 
