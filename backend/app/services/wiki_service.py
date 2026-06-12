@@ -63,11 +63,19 @@ class WikiService:
         await self.file_tools.update_index(page_id, {
             "title": metadata.title,
             "slug": slug,
+            "description": metadata.description,
             "tags": metadata.tags,
             "category": metadata.category,
             "status": metadata.status.value,
             "updated_at": metadata.updated_at.isoformat()
         })
+        
+        # 写入操作日志
+        await self.file_tools.append_log(
+            action="create",
+            title=metadata.title,
+            details=f"ID: {page_id}, 标签: {', '.join(metadata.tags[:5])}"
+        )
         
         return WikiPage(
             id=page_id,
@@ -192,6 +200,7 @@ class WikiService:
         await self.file_tools.update_index(page_id, {
             "title": new_metadata.title,
             "slug": new_slug,
+            "description": new_metadata.description,
             "tags": new_metadata.tags,
             "category": new_metadata.category,
             "status": new_metadata.status.value,
@@ -321,3 +330,53 @@ class WikiService:
             "nodes": nodes,
             "edges": edges
         }
+
+    async def backfill_descriptions(self) -> Dict[str, Any]:
+        """
+        批量为缺少 description 的 Wiki 页面生成摘要描述。
+        返回处理结果统计。
+        """
+        from app.services.ai_service import AIService
+        ai_service = AIService()
+
+        all_pages = await self.list_pages()
+        pages_without_desc = [p for p in all_pages if not p.metadata.description]
+
+        result = {
+            "total_pages": len(all_pages),
+            "pages_without_description": len(pages_without_desc),
+            "updated": [],
+            "errors": []
+        }
+
+        for page in pages_without_desc:
+            try:
+                description = await ai_service.generate_wiki_description(
+                    page.metadata.title, page.content
+                )
+                if description:
+                    new_metadata = page.metadata
+                    new_metadata.description = description
+                    await self.update_page(
+                        page.id,
+                        WikiPageUpdate(metadata=new_metadata)
+                    )
+                    result["updated"].append({
+                        "id": page.id,
+                        "title": page.metadata.title,
+                        "description": description[:100]
+                    })
+                else:
+                    result["errors"].append({
+                        "id": page.id,
+                        "title": page.metadata.title,
+                        "error": "AI 生成描述返回空"
+                    })
+            except Exception as e:
+                result["errors"].append({
+                    "id": page.id,
+                    "title": page.metadata.title,
+                    "error": str(e)
+                })
+
+        return result

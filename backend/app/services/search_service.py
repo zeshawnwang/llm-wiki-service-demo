@@ -162,7 +162,8 @@ class SearchService:
                     query_lower,
                     page.metadata.title,
                     page.content,
-                    page.metadata.tags
+                    page.metadata.tags,
+                    description=page.metadata.description
                 )
                 if score > 0:
                     results.append({
@@ -175,7 +176,8 @@ class SearchService:
                         "metadata": {
                             "tags": page.metadata.tags,
                             "category": page.metadata.category,
-                            "status": page.metadata.status.value
+                            "status": page.metadata.status.value,
+                            "description": page.metadata.description
                         }
                     })
         
@@ -186,38 +188,46 @@ class SearchService:
         query_lower: str,
         title: str,
         content: str,
-        tags: List[str]
+        tags: List[str],
+        description: Optional[str] = None
     ) -> float:
-        """计算关键词匹配分数（支持中文）"""
+        """计算关键词匹配分数（支持中文，description 权重介于 title 和 content 之间）"""
         score = 0.0
         title_lower = title.lower()
         content_lower = content.lower()
         tags_lower = [t.lower() for t in tags]
-        
+        desc_lower = (description or "").lower()
+
         # 方法1: 完整查询匹配
         if query_lower in title_lower:
             score += 15.0
-        
+        if query_lower in desc_lower:
+            score += 8.0
+
         # 方法2: 单个字符匹配（中文）
         for char in query_lower:
             if char in title_lower:
                 score += 0.5
+            if char in desc_lower:
+                score += 0.4
             if any(char in tag for tag in tags_lower):
                 score += 0.3
             if char in content_lower:
                 score += 0.2
-        
+
         # 方法3: 如果有空格（英文），按单词匹配
         if " " in query_lower:
             query_terms = query_lower.split()
             for term in query_terms:
                 if term in title_lower:
                     score += 10.0
+                if term in desc_lower:
+                    score += 6.0
                 if any(term in tag for tag in tags_lower):
                     score += 5.0
                 content_count = content_lower.count(term)
                 score += min(content_count * 0.5, 3.0)
-        
+
         return score
     
     async def _semantic_search(

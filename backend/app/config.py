@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     """应用配置"""
 
     # ========== LLM 供应商配置 ==========
-    llm_provider: Literal["openai", "anthropic", "minimax"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "minimax", "deepseek"] = "openai"
 
     # OpenAI 配置
     openai_api_key: str = ""
@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.chat"
     minimax_chat_model: str = "MiniMax-M2.7"
+
+    # DeepSeek 配置
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_chat_model: str = "deepseek-chat"
 
     # ========== 向量搜索配置 ==========
     enable_vector_search: bool = True
@@ -70,6 +75,8 @@ class Settings(BaseSettings):
             return self.anthropic_chat_model
         if self.llm_provider == "minimax":
             return self.minimax_chat_model
+        if self.llm_provider == "deepseek":
+            return self.deepseek_chat_model
         return self.openai_chat_model
 
     @property
@@ -88,6 +95,10 @@ class Settings(BaseSettings):
     @property
     def is_minimax(self) -> bool:
         return self.llm_provider == "minimax"
+
+    @property
+    def is_deepseek(self) -> bool:
+        return self.llm_provider == "deepseek"
 
 
 @lru_cache()

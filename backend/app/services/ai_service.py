@@ -43,6 +43,8 @@ class AIService:
             return await self._call_anthropic(messages, model=model, temperature=temperature)
         elif self.provider == "minimax":
             return await self._call_minimax(messages, model=model, temperature=temperature)
+        elif self.provider == "deepseek":
+            return await self._call_deepseek(messages, model=model, temperature=temperature)
         else:
             return await self._call_openai(messages, model=model, temperature=temperature)
     
@@ -260,6 +262,49 @@ class AIService:
             logger.error(f"[Minimax] 调用失败 - 模型: {model_name}, 错误: {str(e)}")
             raise
     
+    async def _call_deepseek(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.7
+    ) -> Dict[str, Any]:
+        """调用DeepSeek API（OpenAI兼容格式）"""
+        model_name = model or self.settings.deepseek_chat_model
+        logger.info(f"[DeepSeek] 开始调用 - 模型: {model_name}, temperature: {temperature}")
+        
+        api_key = self.settings.deepseek_api_key
+        if not api_key:
+            logger.error(f"[DeepSeek] 调用失败 - API Key未配置")
+            raise ValueError("DeepSeek API Key未配置，请检查 DEEPSEEK_API_KEY")
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False
+        }
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.settings.deepseek_base_url}/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=120.0
+                )
+                response.raise_for_status()
+                result = response.json()
+                logger.info(f"[DeepSeek] 调用成功 - 模型: {model_name}, 响应tokens: {len(result.get('choices', []))}")
+                return result
+        except Exception as e:
+            logger.error(f"[DeepSeek] 调用失败 - 模型: {model_name}, 错误: {str(e)}")
+            raise
+    
     async def _get_embedding(self, text: str) -> List[float]:
         """获取文本的embedding向量（目前仅OpenAI支持）"""
         api_key = self.settings.openai_api_key
@@ -334,7 +379,8 @@ class AIService:
         self,
         source_content: str,
         title: str,
-        related_docs: Optional[List[str]] = None
+        related_docs: Optional[List[str]] = None,
+        existing_page_titles: Optional[List[str]] = None
     ) -> Dict[str, str]:
         """从原始内容生成Wiki页面"""
         related_content = ""
@@ -344,14 +390,23 @@ class AIService:
                 if doc:
                     related_content += f"\n\n相关文档 {doc_id}:\n{doc[:2000]}"
         
-        system_prompt = """你是一个知识管理专家。请将提供的原始内容整理成结构化的Wiki页面。
+        # 构建已有页面列表供 wikilink 引用
+        wikilink_hint = ""
+        if existing_page_titles:
+            wikilink_hint = f"""
+已有Wiki页面标题（可用 [[标题]] 格式引用）：
+{chr(10).join(f'- {t}' for t in existing_page_titles[:30])}
+"""
+        
+        system_prompt = f"""你是一个知识管理专家。请将提供的原始内容整理成结构化的Wiki页面。
 要求：
 1. 使用Markdown格式
 2. 包含清晰的标题层级
 3. 提取关键概念并加粗
-4. 添加适当的链接引用
-5. 保持客观、准确
-
+4. **重要：当提到与已有Wiki页面相关的概念时，使用 [[页面标题]] 格式创建内部链接**
+5. 对于尚不存在但值得独立成页的重要概念，也用 [[概念名]] 标注（方便未来扩展）
+6. 保持客观、准确
+{wikilink_hint}
 输出格式：
 - 第一行：页面标题
 - 然后是Markdown格式的内容"""
@@ -408,6 +463,25 @@ class AIService:
                 "content": f"生成失败: {str(e)}"
             }
     
+    async def generate_wiki_description(self, title: str, content: str) -> str:
+        """为 Wiki 页面生成简短描述（用于 ask 检索时 AI 理解页面内容）"""
+        system_prompt = """请为以下Wiki页面生成一段简短描述（2-4句话），说明这个页面具体讲了什么内容、涉及哪些关键信息。
+描述应该帮助读者快速判断：如果我有某个问题，这个页面是否能回答。
+直接输出描述文本，不要加标题或前缀。"""
+
+        user_content = f"页面标题：{title}\n\n页面内容（前2000字）：\n{content[:2000]}"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ]
+
+        try:
+            result = await self.call_llm(messages, temperature=0.3)
+            return result["choices"][0]["message"]["content"].strip()
+        except Exception:
+            return ""
+
     async def chat_with_knowledge(
         self,
         query: str,

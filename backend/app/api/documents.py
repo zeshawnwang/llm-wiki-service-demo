@@ -4,9 +4,11 @@ from pydantic import BaseModel, Field
 
 from app.models.document import Document, DocumentCreate, DocumentMetadata, DocumentType
 from app.services.document_service import DocumentService
+from app.services.pipeline_service import IngestionPipeline
 
 router = APIRouter()
 doc_service = DocumentService()
+pipeline = IngestionPipeline()
 
 
 # ==================== Request Models ====================
@@ -19,6 +21,7 @@ class DocumentCreateRequest(BaseModel):
     doc_type: Optional[DocumentType] = None
     category: Optional[str] = None
     tags: Optional[List[str]] = None
+    auto_ingest: bool = True  # 上传后自动触发AI归纳
 
 
 class DocumentUpdateRequest(BaseModel):
@@ -39,9 +42,9 @@ class DocumentUploadMetadata(BaseModel):
 
 # ==================== Routes ====================
 
-@router.post("", response_model=Document)
+@router.post("", response_model=None)
 async def create_document(request: DocumentCreateRequest):
-    """创建新文档"""
+    """创建新文档（默认自动触发AI归纳）"""
     metadata = DocumentMetadata(
         title=request.title or request.filename,
         doc_type=request.doc_type or DocumentType.OTHER,
@@ -55,18 +58,29 @@ async def create_document(request: DocumentCreateRequest):
         metadata=metadata
     )
 
-    return await doc_service.create_document(doc_create)
+    doc = await doc_service.create_document(doc_create)
+
+    # 自动触发归纳
+    if request.auto_ingest:
+        report = await pipeline.run(doc_ids=[doc.id])
+        return {
+            "document": doc.model_dump(mode="json"),
+            "ingest_report": report.to_dict()
+        }
+
+    return doc
 
 
-@router.post("/upload", response_model=Document)
+@router.post("/upload", response_model=None)
 async def upload_document(
     file: UploadFile = File(...),
     title: Optional[str] = None,
     doc_type: Optional[DocumentType] = None,
     category: Optional[str] = None,
-    tags: Optional[str] = None
+    tags: Optional[str] = None,
+    auto_ingest: bool = True
 ):
-    """上传文档文件（保留multipart/form-data，因为需要接收文件）"""
+    """上传文档文件（默认自动触发AI归纳）"""
     content = await file.read()
     content_str = content.decode('utf-8')
 
@@ -85,7 +99,17 @@ async def upload_document(
         metadata=metadata
     )
 
-    return await doc_service.create_document(doc_create)
+    doc = await doc_service.create_document(doc_create)
+
+    # 自动触发归纳
+    if auto_ingest:
+        report = await pipeline.run(doc_ids=[doc.id])
+        return {
+            "document": doc.model_dump(mode="json"),
+            "ingest_report": report.to_dict()
+        }
+
+    return doc
 
 
 @router.get("", response_model=List[Document])

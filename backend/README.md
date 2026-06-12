@@ -28,11 +28,13 @@ llm-wiki-service/
 │       ├── ai.py
 │       ├── search.py
 │       └── pipeline.py
-├── data/                          # 本地数据存储（自动创建）
+├── data/                          # 本地数据存储（可直接作为 Obsidian Vault 打开）
 │   ├── raw/                       # 原始资料层（AI只读）
 │   ├── wiki/                      # Wiki知识层（AI读写）
-│   │   ├── pages/                 # Wiki页面（Markdown + frontmatter）
-│   │   └── index/                 # 索引文件
+│   │   ├── pages/                 # Wiki页面（标题_id.md，Obsidian 友好命名）
+│   │   ├── index/                 # 索引文件（index.json，API使用）
+│   │   ├── index.md               # Obsidian 索引页（[[wikilinks]] 格式）
+│   │   └── log.md                 # 操作时间线日志
 │   └── vectors/                   # 向量索引缓存
 ├── .env.example                   # 环境变量模板（唯一配置文件）
 ├── requirements.txt
@@ -42,12 +44,26 @@ llm-wiki-service/
 ## 快速开始
 
 ```bash
-pip install -r requirements.txt
+cd backend
+uv venv && source .venv/bin/activate   # 创建并激活虚拟环境
+uv pip install -r requirements.txt      # 安装依赖
 cp .env.example .env
 # 编辑 .env，配置 API Key 和开关
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 # 访问 http://localhost:8000/docs 查看API文档
 ```
+
+> **注意：** 必须在虚拟环境中运行，否则可能因全局 Python 版本不一致导致 `ModuleNotFoundError`。
+
+### Obsidian 集成
+
+`data/` 目录可以直接用 Obsidian 打开作为 Vault：
+
+- Wiki 页面使用可读文件名（`标题_id.md`）
+- 页面内容使用 `[[wikilinks]]` 格式互相链接
+- `wiki/index.md` 是自动生成的目录页（按分类分组）
+- `wiki/log.md` 是操作时间线日志
+- Obsidian 图谱视图可直接展示页面关系
 
 ## 配置说明
 

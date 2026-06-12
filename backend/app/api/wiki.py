@@ -92,6 +92,7 @@ async def update_page(page_id: str, request: WikiPageUpdateRequest):
     if any([request.category, request.tags is not None, request.status is not None]):
         metadata = WikiPageMetadata(
             title=request.title or existing.metadata.title,
+            description=existing.metadata.description,
             category=request.category if request.category is not None else existing.metadata.category,
             tags=request.tags if request.tags is not None else existing.metadata.tags,
             status=request.status if request.status is not None else existing.metadata.status
@@ -149,3 +150,13 @@ async def get_statistics():
 async def get_knowledge_graph():
     """获取知识图谱数据"""
     return await wiki_service.get_knowledge_graph()
+
+
+@router.post("/backfill-descriptions")
+async def backfill_descriptions():
+    """
+    批量为缺少 description 的 Wiki 页面生成摘要描述。
+    适用于已有 Wiki 页面在添加 description 功能之前创建的场景。
+    """
+    result = await wiki_service.backfill_descriptions()
+    return result

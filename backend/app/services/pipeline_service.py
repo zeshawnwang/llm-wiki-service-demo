@@ -13,6 +13,7 @@ from app.services.document_service import DocumentService
 from app.services.wiki_service import WikiService, WikiPageUpdate, WikiPageMetadata, WikiPageStatus
 from app.services.ai_service import AIService
 from app.services.search_service import SearchService
+from app.tools.file_tools import FileTools
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -84,6 +85,10 @@ class IngestionPipeline:
         self.wiki_service = WikiService()
         self.ai_service = AIService()
         self.search_service = SearchService()
+        self.file_tools = FileTools(
+            raw_dir=self.settings.raw_dir,
+            wiki_dir=self.settings.wiki_dir
+        )
 
     # ==================== Step 1: 发现新文档 ====================
 
@@ -127,37 +132,47 @@ class IngestionPipeline:
             "suggested_category": "建议分类"
         }
         """
-        # 构建已有Wiki摘要
+        # 构建已有Wiki摘要（包含description帮助AI理解页面内容）
         wiki_summary = ""
         if existing_wiki_pages:
             wiki_lines = []
             for wp in existing_wiki_pages[:15]:  # 最多参考15个已有页面
+                desc = wp.get('description', '') or ''
+                desc_part = f" — {desc[:80]}" if desc else ""
                 wiki_lines.append(
-                    f"- [ID: {wp['id']}] {wp['title']} "
+                    f"- [ID: {wp['id']}] {wp['title']}{desc_part} "
                     f"(标签: {', '.join(wp['tags'])}, "
                     f"分类: {wp.get('category', '无')})"
                 )
             wiki_summary = "\n".join(wiki_lines)
 
         system_prompt = """你是一个知识库管理员。现在有一篇新文档需要纳入知识库。
-请分析这篇新文档与已有Wiki页面的关系，决定最佳处理策略。
+请基于新文档的**具体内容**与已有Wiki页面的关系，决定最佳处理策略。
 
-**第一步：判断文档包含几个独立知识主题**
-- 如果文档只讨论一个核心主题 → topic_count = 1
-- 如果文档涉及多个独立主题（如一篇长文同时讲了"RAG原理"和"向量数据库选型"）→ topic_count > 1
+**核心原则：一个Wiki页面对应一个具体的"知识实体"。**
 
-**第二步：对每个主题，分别判断处理策略**
+判断"知识实体"是否相同的方法：看文档描述的具体对象是否相同。
+- 例如CodeReview：同一个项目的同一个分支 = 同一个知识实体 → merge_into 或 skip
+- 例如CodeReview：不同项目 或 不同分支 = 不同的知识实体 → create_new
+- 例如技术文章：讲的是同一个技术方案的不同角度 = 同一个知识实体 → merge_into
+- 例如技术文章：讲的是完全不同的技术 = 不同的知识实体 → create_new
 
-可选策略：
-1. "create_new" - 该主题是全新的，需要创建新Wiki页面
-2. "merge_into" - 该主题的内容可以合并到某个已有Wiki页面中
-3. "skip" - 该主题已被已有Wiki充分覆盖
+**处理策略：**
+1. "create_new" - 新文档描述的知识实体在已有Wiki中不存在（不同的项目、不同的分支、不同的具体对象）
+2. "merge_into" - 新文档和某个已有Wiki页面描述的是同一个知识实体，但新文档包含补充信息（新视角、新细节、后续更新）
+3. "skip" - 新文档和某个已有Wiki页面不仅描述同一个知识实体，而且具体内容也高度重复，没有新信息
+
+**判断流程：**
+1. 从新文档中识别出它描述的具体对象（哪个项目？哪个分支？哪个技术？哪个事件？）
+2. 在已有Wiki中查找是否有描述同一具体对象的页面
+3. 如果找到：对比具体内容，有新信息则 merge_into，完全重复则 skip
+4. 如果没找到：create_new
 
 请返回JSON格式：
 {
     "action": "create_new" | "merge_into" | "split_and_merge" | "skip",
     "topic_count": 主题数量(整数),
-    "reason": "整体判断原因",
+    "reason": "判断原因（说明识别出的知识实体是什么，以及为什么选择该策略）",
     "topics": [
         {
             "topic_name": "主题名称",
@@ -251,6 +266,14 @@ class IngestionPipeline:
                 changes=["没有需要新建的主题"]
             )
 
+        # 获取已有Wiki页面标题列表（用于 [[wikilinks]] 生成）
+        existing_titles = []
+        try:
+            index = await self.wiki_service.get_index()
+            existing_titles = [p.get("title", "") for p in index.get("pages", []) if p.get("title")]
+        except Exception:
+            pass
+
         created_page_ids = []
         changes = []
 
@@ -260,15 +283,24 @@ class IngestionPipeline:
             try:
                 gen_result = await self.ai_service.generate_wiki_page(
                     source_content=new_doc['content'],
-                    title=topic.get('suggested_title', topic.get('topic_name', new_doc['title']))
+                    title=topic.get('suggested_title', topic.get('topic_name', new_doc['title'])),
+                    existing_page_titles=existing_titles
                 )
+
+                # 在内容末尾追加来源文档链接（Obsidian 可点击跳转）
+                doc_title = new_doc.get('title', new_doc['id'])
+                # 使用与 raw 文件实际文件名一致的 stem（标题_id）
+                raw_filename_stem = self.file_tools._make_filename(new_doc['id'], doc_title).replace('.md', '')
+                source_link = f"\n\n---\n\n> **来源文档：** [[{raw_filename_stem}|{doc_title}]]"
+                final_content = gen_result['content'] + source_link
 
                 from app.models.wiki import WikiPageCreate
                 page = await self.wiki_service.create_page(WikiPageCreate(
                     title=gen_result['title'],
-                    content=gen_result['content'],
+                    content=final_content,
                     metadata=WikiPageMetadata(
                         title=gen_result['title'],
+                        description=await self.ai_service.generate_wiki_description(gen_result['title'], final_content),
                         tags=topic.get('suggested_tags', []),
                         category=topic.get('suggested_category'),
                         status=WikiPageStatus.PUBLISHED,
@@ -300,15 +332,23 @@ class IngestionPipeline:
 
                     gen_result = await self.ai_service.generate_wiki_page(
                         source_content=segment.get('content', ''),
-                        title=topic_config.get('suggested_title', topic_name)
+                        title=topic_config.get('suggested_title', topic_name),
+                        existing_page_titles=existing_titles
                     )
+
+                    # 在内容末尾追加来源文档链接（Obsidian 可点击跳转）
+                    doc_title = new_doc.get('title', new_doc['id'])
+                    raw_filename_stem = self.file_tools._make_filename(new_doc['id'], doc_title).replace('.md', '')
+                    source_link = f"\n\n---\n\n> **来源文档：** [[{raw_filename_stem}|{doc_title}]]"
+                    final_content = gen_result['content'] + source_link
 
                     from app.models.wiki import WikiPageCreate
                     page = await self.wiki_service.create_page(WikiPageCreate(
                         title=gen_result['title'],
-                        content=gen_result['content'],
+                        content=final_content,
                         metadata=WikiPageMetadata(
                             title=gen_result['title'],
+                            description=await self.ai_service.generate_wiki_description(gen_result['title'], final_content),
                             tags=topic_config.get('suggested_tags', []),
                             category=topic_config.get('suggested_category'),
                             status=WikiPageStatus.PUBLISHED,
@@ -350,12 +390,27 @@ class IngestionPipeline:
         analysis: Dict[str, Any]
     ) -> IngestionResult:
         """将新文档内容合并到已有Wiki页面"""
+        # 从 topics 中获取 target_page_id（兼容顶层和 topics 内两种格式）
         target_id = analysis.get('target_page_id')
+        if not target_id:
+            topics = analysis.get('topics', [])
+            for t in topics:
+                if t.get('action') == 'merge_into' and t.get('target_page_id'):
+                    target_id = t['target_page_id']
+                    break
+
+        # 如果仍然没有 target_id，尝试自动匹配最相关的已有 Wiki 页面
+        if not target_id:
+            all_pages = await self.wiki_service.list_pages()
+            if all_pages:
+                # 简单策略：取第一个页面（单页面场景下通常就是目标）
+                target_id = all_pages[0].id
+
         if not target_id:
             return IngestionResult(
                 doc_id=new_doc['id'],
                 status="error",
-                error="未指定目标Wiki页面ID"
+                error="未指定目标Wiki页面ID且无法自动匹配"
             )
 
         try:
@@ -377,15 +432,36 @@ class IngestionPipeline:
                 conflicts=analysis.get('conflicts', [])
             )
 
+            # 合并后追加所有来源文档链接（确保 Obsidian 图谱可见）
+            all_source_ids = existing_page.metadata.source_documents + [new_doc['id']]
+            source_links = []
+            for src_id in all_source_ids:
+                # 尝试获取原文档标题
+                src_doc = await self.doc_service.get_document(src_id)
+                src_title = src_doc.metadata.title if src_doc else src_id
+                raw_stem = self.file_tools._make_filename(src_id, src_title).replace('.md', '')
+                source_links.append(f"[[{raw_stem}|{src_title}]]")
+            
+            # 移除内容中旧的来源文档部分（如果有），再追加新的
+            import re as _re
+            pattern = r'\n---\n\n> \*\*来源文档.*'
+            merged_content = _re.sub(pattern, '', merged_content, flags=_re.DOTALL).rstrip()
+            merged_content += "\n\n---\n\n> **来源文档：** " + " / ".join(source_links)
+
             # 合并标签
             merged_tags = list(set(
                 existing_page.metadata.tags + analysis.get('suggested_tags', [])
             ))
 
+            # 合并后重新生成描述（内容已变化）
+            updated_description = await self.ai_service.generate_wiki_description(
+                existing_page.metadata.title, merged_content
+            )
+
             # 更新页面
             new_metadata = WikiPageMetadata(
                 title=existing_page.metadata.title,
-                description=existing_page.metadata.description,
+                description=updated_description or existing_page.metadata.description,
                 author=existing_page.metadata.author,
                 tags=merged_tags,
                 category=analysis.get('suggested_category') or existing_page.metadata.category,
@@ -462,8 +538,13 @@ class IngestionPipeline:
                             new_title=segment.get('topic', ''),
                             conflicts=[]
                         )
+                        # 合并后重新生成描述
+                        merged_description = await self.ai_service.generate_wiki_description(
+                            existing.metadata.title, merged
+                        )
                         new_meta = WikiPageMetadata(
                             title=existing.metadata.title,
+                            description=merged_description or existing.metadata.description,
                             tags=existing.metadata.tags + segment.get('tags', []),
                             category=existing.metadata.category,
                             status=existing.metadata.status,
@@ -478,18 +559,20 @@ class IngestionPipeline:
                 else:
                     # 创建新页面
                     from app.models.wiki import WikiPageCreate
+                    segment_title = segment.get('topic', '新主题')
                     page = await self.wiki_service.create_page(WikiPageCreate(
-                        title=segment.get('topic', '新主题'),
+                        title=segment_title,
                         content=segment_content,
                         metadata=WikiPageMetadata(
-                            title=segment.get('topic', '新主题'),
+                            title=segment_title,
+                            description=await self.ai_service.generate_wiki_description(segment_title, segment_content),
                             tags=segment.get('tags', []),
                             category=analysis.get('suggested_category'),
                             status=WikiPageStatus.PUBLISHED,
                             source_documents=[new_doc['id']]
                         )
                     ))
-                    changes.append(f"创建新页面: {segment.get('topic', '新主题')}")
+                    changes.append(f"创建新页面: {segment_title}")
                     processed_page_ids.append(page.id)
 
             # 标记文档已处理
@@ -792,6 +875,7 @@ class IngestionPipeline:
             existing_wiki_pages.append({
                 "id": wp.id,
                 "title": wp.metadata.title,
+                "description": wp.metadata.description,
                 "tags": wp.metadata.tags,
                 "category": wp.metadata.category,
                 "status": wp.metadata.status.value
@@ -843,6 +927,7 @@ class IngestionPipeline:
                         existing_wiki_pages.append({
                             "id": new_page.id,
                             "title": new_page.metadata.title,
+                            "description": new_page.metadata.description,
                             "tags": new_page.metadata.tags,
                             "category": new_page.metadata.category,
                             "status": new_page.metadata.status.value
@@ -877,6 +962,15 @@ class IngestionPipeline:
                 summary["error"] += 1
         report.summary = summary
         report.finished_at = datetime.now().isoformat()
+
+        # Step 6: 写入操作日志
+        for r in report.results:
+            details = ", ".join(r.changes[:3]) if r.changes else ""
+            await self.file_tools.append_log(
+                action=f"ingest ({r.status})",
+                title=r.doc_id,
+                details=details
+            )
 
         return report
 
